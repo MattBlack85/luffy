@@ -1,128 +1,164 @@
-#[derive(Debug, PartialEq)]
-enum TokenKind {
-    Eof,
-    Int(i64),
-    LParen,
-    Print,
-    RParen,
-    Str(String),
+use std::str::Chars;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LiteralKind {
+    Char,
+    Str,
+    Int,
+    Float,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TokenKind {
+    Ident,
+    Literal { kind: LiteralKind },
+    Eof,
+
+    // Operators
+    Plus,
+    Minus,
+    Star,
+    Eq,
+    Lt,
+    Gt,
+    And,
+    Or,
+    OpenParen,
+    CloseParen,
+    Comma,
+    Dot,
+    OpenBrace,
+    CloseBrace,
+    OpenBracket,
+    CloseBracket,
+    Ws,
+    Unknown,
+}
+
+const EOF_CHAR: char = '\0';
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Token {
-    kind: TokenKind,
-    pos: usize,
+    pub kind: TokenKind,
+    len: u32,
+}
+
+impl Token {
+    fn new(kind: TokenKind, len: u32) -> Token {
+        Token { kind, len }
+    }
 }
 
 pub struct Lexer<'a> {
-    bytes: &'a [u8],
-    idx: usize,
+    chars: Chars<'a>,
+    len_remaining: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
-            bytes: input.as_bytes(),
-            idx: 0,
+            chars: input.chars(),
+            len_remaining: input.len(),
         }
     }
 
-    fn peek(&mut self) -> Option<u8> {
-        self.bytes.get(self.idx).copied()
+    fn pos_within_token(&self) -> u32 {
+        (self.len_remaining - self.chars.as_str().len()) as u32
     }
 
-    fn next(&mut self) -> Option<u8> {
-        let c = self.peek()?;
-        self.idx += 1;
-        Some(c)
+    fn reset_pos_within_token(&mut self) {
+        self.len_remaining = self.chars.as_str().len();
     }
 
-    fn string(&mut self) -> String {
-        let mut s = Vec::new();
+    fn peek(&self) -> char {
+        self.chars.clone().next().unwrap_or(EOF_CHAR)
+    }
 
+    fn bump(&mut self) -> Option<char> {
+        self.chars.next()
+    }
+
+    fn eat_while(&mut self, mut predicate: impl FnMut(char) -> bool) {
+        while predicate(self.peek()) && !self.is_eof() {
+            self.bump();
+        }
+    }
+
+    fn lookup_ident(&mut self) -> TokenKind {
+        self.eat_while(|c| c.is_ascii_lowercase() || c == '_');
+        TokenKind::Ident
+    }
+
+    fn is_eof(&self) -> bool {
+        self.chars.as_str().is_empty()
+    }
+
+    fn number(&mut self) -> () {
+        self.eat_decimal_digits();
+    }
+
+    fn eat_decimal_digits(&mut self) -> bool {
+        let mut has_digits = false;
         loop {
-            let p = self.next();
-
-            if p == Some(b'"') || p == None {
-                break;
-            };
-
-            s.push(p.unwrap());
-        }
-
-        String::from_utf8(s).expect("String is not UTF-8")
-    }
-
-    fn number(&mut self) -> i64 {
-        let start_pos = self.idx - 1;
-
-        while let Some(c) = self.peek() {
-            if c.is_ascii_digit() {
-                self.idx += 1;
-            } else {
-                break;
+            match self.peek() {
+                '0'..='9' => {
+                    has_digits = true;
+                    self.bump();
+                }
+                _ => break,
             }
         }
-
-        println!("Possible number: {:?}", &self.bytes[start_pos..self.idx]);
-
-        // zero-copy UTF-8 view
-        let s = str::from_utf8(&self.bytes[start_pos..self.idx]).unwrap();
-        i64::from_str_radix(s, 10).unwrap()
+        has_digits
     }
 
-    fn ignore(&mut self) {
-        while let Some(c) = self.peek() {
-            println!("Ignore fn: char {}", c as char);
-            if c.is_ascii_whitespace() {
-                self.idx += 1;
-            } else {
-                println!("Breaking, IDX at {}", self.idx);
-                break;
-            }
-        }
-    }
+    fn advance_token(&mut self) -> Token {
+        let Some(c) = self.bump() else {
+            println!("Ending of the file");
+            return Token::new(TokenKind::Eof, 0);
+        };
 
-    fn lookup_identifier(&mut self) -> String {
-        let start = self.idx - 1;
-        while let Some(c) = self.peek() {
-            if c.is_ascii_alphanumeric() {
-                self.idx += 1;
-            } else {
-                break;
+        let token_kind = match c {
+            c if c.is_ascii_whitespace() => TokenKind::Ws,
+            '(' => TokenKind::OpenParen,
+            ')' => TokenKind::CloseParen,
+            '.' => TokenKind::Dot,
+            ',' => TokenKind::Comma,
+            '[' => TokenKind::OpenBracket,
+            ']' => TokenKind::CloseBracket,
+            '{' => TokenKind::OpenBrace,
+            '}' => TokenKind::CloseBrace,
+            '+' => TokenKind::Plus,
+            '-' => TokenKind::Minus,
+            '*' => TokenKind::Star,
+            '=' => TokenKind::Eq,
+            '&' => TokenKind::And,
+            '|' => TokenKind::Or,
+            '<' => TokenKind::Lt,
+            '>' => TokenKind::Gt,
+            '0'..'9' => {
+                self.number();
+                TokenKind::Literal {
+                    kind: LiteralKind::Int,
+                }
             }
-        }
-        String::from_utf8(self.bytes[start..self.idx].to_vec()).unwrap()
+            '_' | 'a'..='z' | 'A'..='Z' => self.lookup_ident(),
+            _ => TokenKind::Unknown,
+        };
+
+        let res = Token::new(token_kind, self.pos_within_token());
+        println!("Token: {:?}", &res);
+        self.reset_pos_within_token();
+        res
     }
 
     pub fn tokenize(&mut self) -> Vec<Token> {
         let mut tokens: Vec<Token> = Vec::new();
 
         loop {
-            self.ignore();
-            let pos = self.idx;
-            let peeked = self.next();
-            if peeked.is_some() {
-                println!("Peeked: {:?}", peeked.clone().unwrap() as char);
-            };
-            let token_kind = match peeked {
-                None => TokenKind::Eof,
-                Some(b'"') => TokenKind::Str(self.string()),
-                Some(b'(') => TokenKind::LParen,
-                Some(b')') => TokenKind::RParen,
-                Some(c) if c.is_ascii_digit() => TokenKind::Int(self.number()),
-                Some(c) if c.is_ascii_alphabetic() => match self.lookup_identifier().as_str() {
-                    "print" => TokenKind::Print,
-                    _ => panic!("Unknown identifier"),
-                },
-                u => panic!("Unknown token: {:?}", u),
-            };
-            println!("Token: {:?}", &token_kind);
-            tokens.push(Token {
-                kind: token_kind,
-                pos: pos,
-            });
+            let token = self.advance_token();
+            tokens.push(token);
 
-            if tokens.last().unwrap().kind == TokenKind::Eof {
+            if token.kind == TokenKind::Eof {
                 break;
             }
         }
@@ -137,88 +173,60 @@ mod tests {
 
     #[test]
     fn test_all_ws() {
-        let program = "         ";
+        let program = "   ";
         let tokens = Lexer::new(&program).tokenize();
 
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens.first().unwrap().kind, TokenKind::Eof);
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof);
     }
 
     #[test]
-    fn test_string() {
-        let program = "\"hello\"";
+    fn test_numbers() {
+        let program = "12345";
         let tokens = Lexer::new(&program).tokenize();
 
         assert_eq!(tokens.len(), 2);
         assert_eq!(
             tokens.first().unwrap().kind,
-            TokenKind::Str(String::from("hello"))
+            TokenKind::Literal {
+                kind: LiteralKind::Int
+            }
         );
     }
 
     #[test]
-    fn test_print_string() {
-        let program = "print(\"hello\")";
+    fn test_ident() {
+        let program = "hello world";
         let tokens = Lexer::new(&program).tokenize();
 
-        assert_eq!(tokens.len(), 5);
-        assert_eq!(tokens.first().unwrap().kind, TokenKind::Print);
-        assert_eq!(tokens.get(1).unwrap().kind, TokenKind::LParen);
-        assert_eq!(
-            tokens.get(2).unwrap().kind,
-            TokenKind::Str(String::from("hello"))
-        );
-        assert_eq!(tokens.get(3).unwrap().kind, TokenKind::RParen);
-    }
+        assert_eq!(tokens.len(), 4);
+        let first = tokens.first().unwrap();
+        let second = tokens.get(2).unwrap();
+        assert_eq!(first.kind, TokenKind::Ident);
+        assert_eq!(first.len, 5);
+        assert_eq!(second.kind, TokenKind::Ident);
+        assert_eq!(second.len, 5);
 
-    #[test]
-    fn test_print_number() {
-        let program = "print(1)";
+        let program = "hello hello_world";
         let tokens = Lexer::new(&program).tokenize();
 
-        assert_eq!(tokens.len(), 5);
-        assert_eq!(tokens.first().unwrap().kind, TokenKind::Print);
-        assert_eq!(tokens.get(1).unwrap().kind, TokenKind::LParen);
-        assert_eq!(tokens.get(2).unwrap().kind, TokenKind::Int(1));
-        assert_eq!(tokens.get(3).unwrap().kind, TokenKind::RParen);
-    }
+        assert_eq!(tokens.len(), 4);
+        let first = tokens.first().unwrap();
+        let second = tokens.get(2).unwrap();
+        assert_eq!(first.kind, TokenKind::Ident);
+        assert_eq!(first.len, 5);
+        assert_eq!(second.kind, TokenKind::Ident);
+        assert_eq!(second.len, 11);
 
-    #[test]
-    fn test_string_and_ws() {
-        let program = "      \"hello \" ";
+        let program = "hello _world";
         let tokens = Lexer::new(&program).tokenize();
 
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(
-            tokens.first().unwrap().kind,
-            TokenKind::Str(String::from("hello "))
-        );
-    }
-
-    #[test]
-    fn test_num() {
-        let program = "12378";
-        let tokens = Lexer::new(&program).tokenize();
-
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens.first().unwrap().kind, TokenKind::Int(12378));
-    }
-
-    #[test]
-    fn test_num_string_and_ws() {
-        let program = " 12378 \"hello\" 3 \"world\"  ";
-        let tokens = Lexer::new(&program).tokenize();
-
-        assert_eq!(tokens.len(), 5);
-        assert_eq!(tokens.first().unwrap().kind, TokenKind::Int(12378));
-        assert_eq!(
-            tokens.get(1).unwrap().kind,
-            TokenKind::Str(String::from("hello"))
-        );
-        assert_eq!(tokens.get(2).unwrap().kind, TokenKind::Int(3));
-        assert_eq!(
-            tokens.get(3).unwrap().kind,
-            TokenKind::Str(String::from("world"))
-        );
+        assert_eq!(tokens.len(), 4);
+        let first = tokens.first().unwrap();
+        let second = tokens.get(2).unwrap();
+        assert_eq!(first.kind, TokenKind::Ident);
+        assert_eq!(first.len, 5);
+        assert_eq!(second.kind, TokenKind::Ident);
+        assert_eq!(second.len, 6);
     }
 }
