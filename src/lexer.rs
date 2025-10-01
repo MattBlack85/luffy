@@ -3,7 +3,7 @@ use std::str::Chars;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LiteralKind {
     Char,
-    Str,
+    Str { terminated: bool },
     Int,
     Float,
 }
@@ -11,7 +11,10 @@ pub enum LiteralKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TokenKind {
     Ident,
-    Literal { kind: LiteralKind },
+    Literal {
+        kind: LiteralKind,
+        suffix_start: u32,
+    },
     Eof,
 
     // Operators
@@ -33,6 +36,7 @@ pub enum TokenKind {
     CloseBracket,
     Ws,
     Unknown,
+    Semi,
 }
 
 const EOF_CHAR: char = '\0';
@@ -84,9 +88,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lookup_ident(&mut self) -> TokenKind {
+    fn eat_ident(&mut self) {
         self.eat_while(|c| c.is_ascii_lowercase() || c == '_');
-        TokenKind::Ident
     }
 
     fn is_eof(&self) -> bool {
@@ -109,6 +112,27 @@ impl<'a> Lexer<'a> {
             }
         }
         has_digits
+    }
+
+    fn is_str_terminated(&mut self) -> bool {
+        while let Some(c) = self.bump() {
+            match c {
+                '"' => return true,
+                _ => (),
+            }
+        }
+
+        false
+    }
+
+    fn eat_string(&mut self) -> TokenKind {
+        let terminated = self.is_str_terminated();
+        let suffix_start = self.pos_within_token();
+        if terminated {
+            self.eat_ident();
+        }
+        let kind = LiteralKind::Str { terminated };
+        TokenKind::Literal { kind, suffix_start }
     }
 
     fn advance_token(&mut self) -> Token {
@@ -135,13 +159,20 @@ impl<'a> Lexer<'a> {
             '|' => TokenKind::Or,
             '<' => TokenKind::Lt,
             '>' => TokenKind::Gt,
+            ';' => TokenKind::Semi,
             '0'..'9' => {
                 self.number();
+                let suffix_start = self.pos_within_token();
                 TokenKind::Literal {
                     kind: LiteralKind::Int,
+                    suffix_start: suffix_start,
                 }
             }
-            '_' | 'a'..='z' | 'A'..='Z' => self.lookup_ident(),
+            '_' | 'a'..='z' | 'A'..='Z' => {
+                self.eat_ident();
+                TokenKind::Ident
+            }
+            '"' => self.eat_string(),
             _ => TokenKind::Unknown,
         };
 
@@ -189,7 +220,8 @@ mod tests {
         assert_eq!(
             tokens.first().unwrap().kind,
             TokenKind::Literal {
-                kind: LiteralKind::Int
+                kind: LiteralKind::Int,
+                suffix_start: 5,
             }
         );
     }
@@ -228,5 +260,12 @@ mod tests {
         assert_eq!(first.len, 5);
         assert_eq!(second.kind, TokenKind::Ident);
         assert_eq!(second.len, 6);
+    }
+
+    #[test]
+    fn test_program() {
+        let program = "func main() { jet_pistol(\"one piece\"); }";
+        let tokens = Lexer::new(&program).tokenize();
+        assert_eq!(tokens.len(), 16);
     }
 }
