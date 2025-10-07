@@ -1,0 +1,4 @@
+func main() {
+  jinbe foo = 1;
+  jet_pistol(foo);
+}
