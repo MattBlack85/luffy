@@ -44,7 +44,7 @@ const EOF_CHAR: char = '\0';
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Token {
     pub kind: TokenKind,
-    len: u32,
+    pub len: u32,
 }
 
 impl Token {
@@ -89,7 +89,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn eat_ident(&mut self) {
-        self.eat_while(|c| c.is_ascii_lowercase() || c == '_');
+        self.eat_while(|c| c.is_alphabetic() || c == '_');
     }
 
     fn is_eof(&self) -> bool {
@@ -137,12 +137,14 @@ impl<'a> Lexer<'a> {
 
     fn advance_token(&mut self) -> Token {
         let Some(c) = self.bump() else {
-            println!("Ending of the file");
             return Token::new(TokenKind::Eof, 0);
         };
 
         let token_kind = match c {
-            c if c.is_ascii_whitespace() => TokenKind::Ws,
+            c if c.is_ascii_whitespace() => {
+                self.eat_while(|c| c.is_ascii_whitespace());
+                TokenKind::Ws
+            }
             '(' => TokenKind::OpenParen,
             ')' => TokenKind::CloseParen,
             '.' => TokenKind::Dot,
@@ -177,7 +179,6 @@ impl<'a> Lexer<'a> {
         };
 
         let res = Token::new(token_kind, self.pos_within_token());
-        println!("Token: {:?}", &res);
         self.reset_pos_within_token();
         res
     }
@@ -207,7 +208,7 @@ mod tests {
         let program = "   ";
         let tokens = Lexer::new(&program).tokenize();
 
-        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens.len(), 2);
         assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof);
     }
 
