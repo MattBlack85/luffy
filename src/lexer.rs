@@ -1,5 +1,20 @@
 use std::str::Chars;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Span {
+    start: usize,
+    end: usize,
+}
+
+impl Span {
+    pub fn len(&self) -> usize {
+        self.end - self.start
+    }
+    pub fn slice<'s>(&self, src: &'s str) -> &'s str {
+        &src[self.start..self.end]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LiteralKind {
     Char,
@@ -41,29 +56,42 @@ pub enum TokenKind {
 
 const EOF_CHAR: char = '\0';
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Token {
     pub kind: TokenKind,
     pub len: u32,
+    pub span: Span,
 }
 
 impl Token {
-    fn new(kind: TokenKind, len: u32) -> Token {
-        Token { kind, len }
+    fn new(kind: TokenKind, len: u32, start: usize, end: usize) -> Token {
+        Token {
+            kind,
+            len,
+            span: Span { start, end },
+        }
     }
 }
 
 pub struct Lexer<'a> {
+    src: &'a str,
     chars: Chars<'a>,
     len_remaining: usize,
+    tot_length: usize,
+    tokens: Vec<Token>,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
-        Self {
+        let mut lex = Self {
+            src: input,
             chars: input.chars(),
             len_remaining: input.len(),
-        }
+            tot_length: input.len(),
+            tokens: Vec::new(),
+        };
+        lex.tokenize();
+        lex
     }
 
     fn pos_within_token(&self) -> u32 {
@@ -137,7 +165,7 @@ impl<'a> Lexer<'a> {
 
     fn advance_token(&mut self) -> Token {
         let Some(c) = self.bump() else {
-            return Token::new(TokenKind::Eof, 0);
+            return Token::new(TokenKind::Eof, 0, self.tot_length, self.tot_length);
         };
 
         let token_kind = match c {
@@ -177,25 +205,35 @@ impl<'a> Lexer<'a> {
             '"' => self.eat_string(),
             _ => TokenKind::Unknown,
         };
-
-        let res = Token::new(token_kind, self.pos_within_token());
+        let token_len = self.pos_within_token();
+        let res = Token::new(
+            token_kind,
+            token_len,
+            self.tot_length - self.len_remaining,
+            self.tot_length - self.len_remaining + token_len as usize,
+        );
         self.reset_pos_within_token();
         res
     }
 
-    pub fn tokenize(&mut self) -> Vec<Token> {
-        let mut tokens: Vec<Token> = Vec::new();
-
+    pub fn tokenize(&mut self) {
         loop {
             let token = self.advance_token();
-            tokens.push(token);
+            self.tokens.push(token);
 
             if token.kind == TokenKind::Eof {
                 break;
             }
         }
+    }
+}
 
-        tokens
+impl<'a> std::fmt::Debug for Lexer<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for t in &self.tokens {
+            write!(f, "Kind: {:?} => {:?}\n", t.kind, t.span.slice(&self.src))?
+        }
+        Ok(())
     }
 }
 
@@ -206,20 +244,20 @@ mod tests {
     #[test]
     fn test_all_ws() {
         let program = "   ";
-        let tokens = Lexer::new(&program).tokenize();
+        let lex = Lexer::new(&program);
 
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof);
+        assert_eq!(lex.tokens.len(), 2);
+        assert_eq!(lex.tokens.last().unwrap().kind, TokenKind::Eof);
     }
 
     #[test]
     fn test_numbers() {
         let program = "12345";
-        let tokens = Lexer::new(&program).tokenize();
+        let lex = Lexer::new(&program);
 
-        assert_eq!(tokens.len(), 2);
+        assert_eq!(lex.tokens.len(), 2);
         assert_eq!(
-            tokens.first().unwrap().kind,
+            lex.tokens.first().unwrap().kind,
             TokenKind::Literal {
                 kind: LiteralKind::Int,
                 suffix_start: 5,
@@ -230,33 +268,33 @@ mod tests {
     #[test]
     fn test_ident() {
         let program = "hello world";
-        let tokens = Lexer::new(&program).tokenize();
+        let lex = Lexer::new(&program);
 
-        assert_eq!(tokens.len(), 4);
-        let first = tokens.first().unwrap();
-        let second = tokens.get(2).unwrap();
+        assert_eq!(lex.tokens.len(), 4);
+        let first = lex.tokens.first().unwrap();
+        let second = lex.tokens.get(2).unwrap();
         assert_eq!(first.kind, TokenKind::Ident);
         assert_eq!(first.len, 5);
         assert_eq!(second.kind, TokenKind::Ident);
         assert_eq!(second.len, 5);
 
         let program = "hello hello_world";
-        let tokens = Lexer::new(&program).tokenize();
+        let lex = Lexer::new(&program);
 
-        assert_eq!(tokens.len(), 4);
-        let first = tokens.first().unwrap();
-        let second = tokens.get(2).unwrap();
+        assert_eq!(lex.tokens.len(), 4);
+        let first = lex.tokens.first().unwrap();
+        let second = lex.tokens.get(2).unwrap();
         assert_eq!(first.kind, TokenKind::Ident);
         assert_eq!(first.len, 5);
         assert_eq!(second.kind, TokenKind::Ident);
         assert_eq!(second.len, 11);
 
         let program = "hello _world";
-        let tokens = Lexer::new(&program).tokenize();
+        let lex = Lexer::new(&program);
 
-        assert_eq!(tokens.len(), 4);
-        let first = tokens.first().unwrap();
-        let second = tokens.get(2).unwrap();
+        assert_eq!(lex.tokens.len(), 4);
+        let first = lex.tokens.first().unwrap();
+        let second = lex.tokens.get(2).unwrap();
         assert_eq!(first.kind, TokenKind::Ident);
         assert_eq!(first.len, 5);
         assert_eq!(second.kind, TokenKind::Ident);
@@ -266,7 +304,7 @@ mod tests {
     #[test]
     fn test_program() {
         let program = "func main() { jet_pistol(\"one piece\"); }";
-        let tokens = Lexer::new(&program).tokenize();
-        assert_eq!(tokens.len(), 16);
+        let lex = Lexer::new(&program);
+        assert_eq!(lex.tokens.len(), 16);
     }
 }
